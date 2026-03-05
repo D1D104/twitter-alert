@@ -2,12 +2,14 @@ import os
 import json
 import base64
 import requests
+import feedparser
 import smtplib
 from email.mime.text import MIMEText
-import snscrape.modules.twitter as sntwitter
+from time import mktime
+from datetime import datetime
 
-ACCOUNT = os.getenv("ACCOUNT")               
-TEAM_KEYWORD = os.getenv("TEAM_KEYWORD", "").lower() 
+ACCOUNT = os.getenv("ACCOUNT")  
+TEAM_KEYWORD = os.getenv("TEAM_KEYWORD", "").lower()  
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 EMAIL_TO = os.getenv("EMAIL_TO")
@@ -56,39 +58,85 @@ def send_email(subject, body):
         s.login(EMAIL_USER, EMAIL_PASS)
         s.send_message(msg)
 
+NITTER_INSTANCES = [
+    "nitter.net",
+    "nitter.snopyta.org",
+    "nitter.42l.fr",
+    "nitter.it",
+]
+
+def fetch_feed(account):
+    for inst in NITTER_INSTANCES:
+        url = f"https://{inst}/{account}/rss"
+        try:
+            r = requests.get(url, timeout=15, headers={"User-Agent": "rss-fetcher/1.0"})
+            if r.status_code == 200 and r.text.strip():
+                return feedparser.parse(r.text)
+        except Exception:
+            continue
+    return None
+
+def entry_id(entry):
+    if "id" in entry and entry.id:
+        return entry.id
+    if "guid" in entry and entry.guid:
+        return entry.guid
+    return entry.get("link", "")
+
+def entry_published_ts(entry):
+    if "published_parsed" in entry and entry.published_parsed:
+        return int(mktime(entry.published_parsed))
+    return 0
+
 def main():
     state, sha = load_state_from_repo()
-    last_id = int(state.get("last_tweet_id", 0))
+    seen_id = state.get("last_id", "")
 
-    query = f"from:{ACCOUNT}"
-    items = []
-    for i, tweet in enumerate(sntwitter.TwitterSearchScraper(query).get_items()):
-        items.append(tweet)
-        if i >= 29:  
-            break
+    feed = fetch_feed(ACCOUNT)
+    if not feed:
+        print("ERROR: could not fetch any Nitter RSS instance.")
+        raise SystemExit(1)
 
-    items.reverse()
-    new_last_id = last_id
-    sent_any = False
+    items = feed.entries or []
+    items.sort(key=entry_published_ts)
 
-    for tweet in items:
-        tid = int(tweet.id)
-        if tid <= last_id:
+    new_last_id = seen_id
+    matches = []
+
+    for entry in items:
+        eid = entry_id(entry)
+        if not eid:
+            continue
+        if seen_id and eid <= seen_id:
             continue
 
-        text = tweet.content.lower()
-        if TEAM_KEYWORD in text:
-            subject = f"[Football Alert] {ACCOUNT} mentioned {TEAM_KEYWORD}"
-            body = f"{tweet.content}\n\nLink: {tweet.url}"
-            send_email(subject, body)
-            sent_any = True
+        text_candidates = []
+        if "title" in entry:
+            text_candidates.append(entry.title)
+        if "summary" in entry:
+            text_candidates.append(entry.summary)
+        content = " ".join(text_candidates).lower()
 
-        if tid > new_last_id:
-            new_last_id = tid
+        if TEAM_KEYWORD in content:
+            link = entry.get("link", "")
+            pub = entry.get("published", "")
+            matches.append({"title": entry.get("title",""), "link": link, "published": pub})
 
-    if new_last_id != last_id:
-        state["last_tweet_id"] = str(new_last_id)
+        new_last_id = eid
+
+    if matches:
+        body_lines = []
+        for m in matches:
+            body_lines.append(f"{m['title']}\n{m['link']}\nPublished: {m['published']}\n\n")
+        body = "\n".join(body_lines)
+        subject = f"[Football Alert] {ACCOUNT} - {len(matches)} new"
+        send_email(subject, body)
+        print(f"Sent email with {len(matches)} items.")
+
+    if new_last_id and new_last_id != seen_id:
+        state["last_id"] = new_last_id
         sha = save_state_to_repo(state, sha)
+        print("State updated in repository.")
 
 if __name__ == "__main__":
     main()
