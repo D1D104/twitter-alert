@@ -1,6 +1,6 @@
 # Twitter / X Football Alert
 
-Simple GitHub Actions project that checks a public X account (via Nitter RSS) every 5 minutes and sends an email when a team keyword appears.
+Simple GitHub Actions project that checks a public X account (via Nitter RSS) every xx:05 (xx in range [0-24]) and sends an email when a team keyword appears.
 
 ## How to use
 
