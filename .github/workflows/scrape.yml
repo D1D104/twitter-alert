@@ -1,5 +1,8 @@
 name: twitter-alert
 
+permissions:
+  contents: write
+
 on:
   schedule:
     - cron: "*/5 * * * *"
@@ -8,9 +11,8 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -18,8 +20,16 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install deps
         run: pip install -r requirements.txt
 
       - name: Run scraper
+        env:
+          ACCOUNT: ${{ vars.ACCOUNT }}
+          TEAM_KEYWORD: ${{ vars.TEAM_KEYWORD }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          STATE_PATH: state.json
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scraper.py
